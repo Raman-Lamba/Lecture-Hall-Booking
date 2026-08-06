@@ -1,0 +1,65 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-plex-mono: "IBM Plex Mono", monospace;
+  --font-inter: "Inter", sans-serif;
+}
+
+body {
+  background-color: #edeae2;
+  background-image: linear-gradient(#c9c2b3 1px, transparent 1px),
+    linear-gradient(90deg, #c9c2b3 1px, transparent 1px);
+  background-size: 24px 24px;
+  color: #1f2937;
+}
+
+.blueprint-card {
+  background: #f7f5f0;
+  border: 1.5px solid #1f2937;
+  box-shadow: 4px 4px 0px 0px #1f2937;
+}
+
+.blueprint-input {
+  background: #f7f5f0;
+  border: 1.5px solid #1f2937;
+}
+
+.blueprint-input:focus {
+  outline: 2px solid #2c5f8a;
+  outline-offset: 1px;
+}
+
+.btn-primary {
+  background: #2c5f8a;
+  color: #f7f5f0;
+  border: 1.5px solid #1f2937;
+  box-shadow: 3px 3px 0px 0px #1f2937;
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+.btn-primary:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 4px 4px 0px 0px #1f2937;
+}
+.btn-primary:active {
+  transform: translate(2px, 2px);
+  box-shadow: 1px 1px 0px 0px #1f2937;
+}
+
+.btn-secondary {
+  background: transparent;
+  color: #1f2937;
+  border: 1.5px solid #1f2937;
+}
+.btn-secondary:hover {
+  background: #1f2937;
+  color: #f7f5f0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

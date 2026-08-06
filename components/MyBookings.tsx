@@ -1,0 +1,79 @@
+"use client";
+
+import { useState } from "react";
+import { supabase } from "@/lib/supabase/client";
+import type { Booking, Room } from "@/types";
+
+interface MyBookingsProps {
+  bookings: Booking[];
+  rooms: Room[];
+  onChanged: () => void;
+}
+
+export default function MyBookings({
+  bookings,
+  rooms,
+  onChanged,
+}: MyBookingsProps) {
+  const [cancelingId, setCancelingId] = useState<string | null>(null);
+
+  const roomName = (roomId: string) =>
+    rooms.find((r) => r.id === roomId)?.name ?? "Unknown room";
+
+  async function cancelBooking(id: string) {
+    setCancelingId(id);
+    const { error } = await supabase.from("bookings").delete().eq("id", id);
+    setCancelingId(null);
+    if (!error) onChanged();
+  }
+
+  const sorted = [...bookings].sort(
+    (a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime()
+  );
+
+  return (
+    <div className="blueprint-card p-5">
+      <p className="font-mono text-xs tracking-widest text-blueprint mb-3">
+        MY UPCOMING BOOKINGS
+      </p>
+
+      {sorted.length === 0 ? (
+        <p className="text-sm text-ink/60">
+          No bookings yet — click any available room in the model to reserve it.
+        </p>
+      ) : (
+        <ul className="space-y-3">
+          {sorted.map((b) => (
+            <li
+              key={b.id}
+              className="flex items-center justify-between border border-ink/20 px-3 py-2"
+            >
+              <div>
+                <p className="font-mono font-medium text-sm">
+                  {roomName(b.room_id)} — {b.title}
+                </p>
+                <p className="text-xs text-ink/60">
+                  {new Date(b.start_time).toLocaleString([], {
+                    dateStyle: "medium",
+                    timeStyle: "short",
+                  })}{" "}
+                  →{" "}
+                  {new Date(b.end_time).toLocaleTimeString([], {
+                    timeStyle: "short",
+                  })}
+                </p>
+              </div>
+              <button
+                onClick={() => cancelBooking(b.id)}
+                disabled={cancelingId === b.id}
+                className="text-xs font-mono text-booked border border-booked px-2 py-1 hover:bg-booked hover:text-paper disabled:opacity-50"
+              >
+                {cancelingId === b.id ? "..." : "Cancel"}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
