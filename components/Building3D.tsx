@@ -2,12 +2,7 @@
 
 import { useRef, useState } from "react";
 import { Canvas } from "@react-three/fiber";
-import {
-  OrbitControls,
-  Text,
-  ContactShadows,
-  Environment,
-} from "@react-three/drei";
+import { OrbitControls, Text } from "@react-three/drei";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import * as THREE from "three";
 import RoomBox from "./RoomBox";
@@ -71,7 +66,7 @@ function FloorPlatform({
 
   return (
     <group>
-      <mesh position={mainArmPos} receiveShadow>
+      <mesh position={mainArmPos}>
         <boxGeometry args={mainArmSize} />
         <meshStandardMaterial color="#DCD7C8" roughness={0.85} transparent opacity={0.75} />
       </mesh>
@@ -80,7 +75,7 @@ function FloorPlatform({
         <lineBasicMaterial color="#1F2937" transparent opacity={0.35} />
       </lineSegments>
 
-      <mesh position={shortArmPos} receiveShadow>
+      <mesh position={shortArmPos}>
         <boxGeometry args={shortArmSize} />
         <meshStandardMaterial color="#DCD7C8" roughness={0.85} transparent opacity={0.75} />
       </mesh>
@@ -124,7 +119,7 @@ function SupportColumns({ width }: { width: number }) {
   return (
     <>
       {corners.map(([x, z], i) => (
-        <mesh key={i} position={[x, midY, z]} castShadow>
+        <mesh key={i} position={[x, midY, z]}>
           <boxGeometry args={[0.14, height, 0.14]} />
           <meshStandardMaterial color="#1F2937" roughness={0.5} />
         </mesh>
@@ -156,20 +151,10 @@ export default function Building3D({
 
   return (
     <div className="w-full h-[560px] blueprint-card overflow-hidden relative">
-      <Canvas shadows camera={{ position: INITIAL_CAMERA_POSITION, fov: 42 }}>
-        <ambientLight intensity={0.55} />
-        <directionalLight
-          position={[7, 11, 6]}
-          intensity={1}
-          castShadow
-          shadow-mapSize={[1024, 1024]}
-          shadow-camera-left={-10}
-          shadow-camera-right={10}
-          shadow-camera-top={10}
-          shadow-camera-bottom={-10}
-        />
-        <directionalLight position={[-6, 3, -5]} intensity={0.25} color="#2C5F8A" />
-        <Environment preset="city" environmentIntensity={0.25} />
+      <Canvas camera={{ position: INITIAL_CAMERA_POSITION, fov: 42 }}>
+        <ambientLight intensity={0.7} />
+        <directionalLight position={[6, 10, 6]} intensity={0.9} />
+        <directionalLight position={[-6, 4, -4]} intensity={0.3} />
 
         <SupportColumns width={maxX} />
 
@@ -187,15 +172,6 @@ export default function Building3D({
             onClick={onRoomClick}
           />
         ))}
-
-        <ContactShadows
-          position={[maxX / 2 - X_STEP / 2, -0.62, 2]}
-          opacity={0.45}
-          scale={maxX + 16}
-          blur={2.2}
-          far={2}
-          color="#1F2937"
-        />
 
         <OrbitControls
           target={INITIAL_TARGET}
@@ -217,6 +193,10 @@ export default function Building3D({
         <span className="flex items-center gap-1.5">
           <span className="w-3 h-3 inline-block" style={{ background: "#C1483F" }} />
           Booked
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="w-3 h-3 inline-block" style={{ background: "#B96A2C" }} />
+          Upcoming
         </span>
         <span className="flex items-center gap-1.5">
           <span className="w-3 h-3 inline-block" style={{ background: "#D4A72C" }} />

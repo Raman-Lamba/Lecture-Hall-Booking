@@ -133,3 +133,84 @@ $$;
 
 grant execute on function public.restrict_signup_domain to supabase_auth_admin;
 revoke execute on function public.restrict_signup_domain from authenticated, anon, public;
+
+-- ============================================
+-- 7. BOOKER NAME, STAMPED SERVER-SIDE
+-- ============================================
+-- Signup now collects a full name into auth.users' user_metadata (see
+-- app/signup). Rather than trust whatever name the client sends with a
+-- booking (easy to spoof from devtools), a trigger looks up the real name
+-- from auth.users and overwrites it on every insert.
+alter table bookings add column if not exists user_name text not null default '';
+
+create or replace function public.set_booking_user_name()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  select coalesce(nullif(raw_user_meta_data->>'full_name', ''), email)
+    into new.user_name
+    from auth.users
+    where id = new.user_id;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_set_booking_user_name on bookings;
+create trigger trg_set_booking_user_name
+  before insert on bookings
+  for each row
+  execute function public.set_booking_user_name();
+
+-- ============================================
+-- 8. REALTIME: broadcast booking changes to every connected client
+-- ============================================
+-- Without this, the bookings table's INSERT/UPDATE/DELETE events never
+-- reach the frontend's postgres_changes subscription, so room colors and
+-- the current-bookings list only ever update for the user who made the
+-- change (after their own refetch) -- never for anyone else's browser tab.
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'bookings'
+  ) then
+    alter publication supabase_realtime add table bookings;
+  end if;
+end $$;
+
+-- ============================================
+-- 9. SERVER-CLOCK-BASED TIME, NOT THE DEVICE'S CLOCK
+-- ============================================
+-- A user's laptop clock can be wrong (wrong timezone, drifted, manually
+-- set). Filtering "current bookings" or validating "not in the past" with
+-- the browser's `new Date()` inherits whatever is wrong with their clock.
+-- These two RPCs let the frontend ask Postgres what time it actually is,
+-- so both checks are anchored to the server, not the device.
+create or replace function public.get_server_time()
+returns timestamptz
+language sql
+stable
+as $$
+  select now();
+$$;
+
+grant execute on function public.get_server_time to authenticated, anon;
+
+create or replace function public.get_current_bookings()
+returns setof bookings
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select * from public.bookings
+  where end_time > now()
+  order by start_time asc;
+$$;
+
+grant execute on function public.get_current_bookings to authenticated;

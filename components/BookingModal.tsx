@@ -1,7 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
+import { computeBookingRange } from "@/lib/time";
+import { serverNow } from "@/lib/serverClock";
 import type { Room } from "@/types";
 
 interface BookingModalProps {
@@ -33,18 +35,23 @@ export default function BookingModal({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  const { crossesMidnight } = useMemo(
+    () => computeBookingRange(date, startTime, endTime),
+    [date, startTime, endTime]
+  );
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
 
-    const startISO = new Date(`${date}T${startTime}`).toISOString();
-    const endISO = new Date(`${date}T${endTime}`).toISOString();
-
-    if (new Date(endISO) <= new Date(startISO)) {
+    if (startTime === endTime) {
       setError("End time must be after start time.");
       return;
     }
-    if (new Date(startISO) < new Date()) {
+
+    const { startISO, endISO } = computeBookingRange(date, startTime, endTime);
+
+    if (new Date(startISO) < (await serverNow())) {
       setError("You can't book a time in the past.");
       return;
     }
@@ -132,6 +139,12 @@ export default function BookingModal({
               />
             </div>
           </div>
+
+          {crossesMidnight && (
+            <p className="text-xs text-blueprint font-mono">
+              Ends the next day ({endTime} on the day after {date}).
+            </p>
+          )}
 
           {error && (
             <p className="text-sm text-booked border border-booked px-3 py-2">

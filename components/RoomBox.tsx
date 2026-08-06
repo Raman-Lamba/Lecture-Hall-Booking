@@ -9,12 +9,14 @@ import type { Room, RoomStatus } from "@/types";
 const STATUS_COLOR: Record<RoomStatus, string> = {
   available: "#5A8F4B",
   booked: "#C1483F",
+  upcoming: "#B96A2C",
   selected: "#D4A72C",
 };
 
 const STATUS_EMISSIVE: Record<RoomStatus, string> = {
   available: "#1E3318",
   booked: "#3A1210",
+  upcoming: "#3A2210",
   selected: "#3A2A08",
 };
 

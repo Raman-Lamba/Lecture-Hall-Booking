@@ -1,12 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase/client";
+import { computeBookingRange } from "@/lib/time";
+import { serverNow, serverNowSync } from "@/lib/serverClock";
 import BookingModal from "@/components/BookingModal";
-import MyBookings from "@/components/MyBookings";
+import CurrentBookings from "@/components/CurrentBookings";
 import type { Room, Booking, RoomStatus } from "@/types";
 
 // 3D scene uses browser-only APIs (WebGL), so load it client-side only
@@ -19,12 +21,22 @@ const Building3D = dynamic(() => import("@/components/Building3D"), {
   ),
 });
 
-function todayStr() {
-  return new Date().toISOString().slice(0, 10);
+// Local calendar date, not UTC -- toISOString() would roll back to the
+// previous day for any positive UTC-offset timezone (e.g. India, UTC+5:30)
+// between midnight and the offset boundary.
+function dateStr(d: Date) {
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
 }
 
-function roundedTimeStr(offsetHours = 0) {
-  const d = new Date();
+function todayStr() {
+  return dateStr(new Date());
+}
+
+function roundedTimeStr(base: Date, offsetHours = 0) {
+  const d = new Date(base);
   d.setHours(d.getHours() + offsetHours, 0, 0, 0);
   return d.toTimeString().slice(0, 5);
 }
@@ -36,13 +48,26 @@ export default function DashboardPage() {
 
   const [rooms, setRooms] = useState<Room[]>([]);
   const [windowBookings, setWindowBookings] = useState<Booking[]>([]);
-  const [myBookings, setMyBookings] = useState<Booking[]>([]);
+  const [currentBookings, setCurrentBookings] = useState<Booking[]>([]);
 
   const [date, setDate] = useState(todayStr());
-  const [startTime, setStartTime] = useState(roundedTimeStr(0));
-  const [endTime, setEndTime] = useState(roundedTimeStr(1));
+  const [startTime, setStartTime] = useState(roundedTimeStr(new Date(), 0));
+  const [endTime, setEndTime] = useState(roundedTimeStr(new Date(), 1));
+  const dateTimeTouchedRef = useRef(false);
 
   const [selectedRoom, setSelectedRoom] = useState<Room | null>(null);
+
+  // Correct the default date/time window against the server's clock once
+  // on mount, in case the device's system clock is wrong (not just its
+  // timezone, which dateStr()/todayStr() already handle correctly).
+  useEffect(() => {
+    serverNow().then((now) => {
+      if (dateTimeTouchedRef.current) return;
+      setDate(dateStr(now));
+      setStartTime(roundedTimeStr(now, 0));
+      setEndTime(roundedTimeStr(now, 1));
+    });
+  }, []);
 
   // --- Auth guard ---
   useEffect(() => {
@@ -80,8 +105,7 @@ export default function DashboardPage() {
   // --- Fetch bookings overlapping the currently selected window ---
   const fetchWindowBookings = useCallback(async () => {
     if (!date || !startTime || !endTime) return;
-    const startISO = new Date(`${date}T${startTime}`).toISOString();
-    const endISO = new Date(`${date}T${endTime}`).toISOString();
+    const { startISO, endISO } = computeBookingRange(date, startTime, endTime);
 
     const { data } = await supabase
       .from("bookings")
@@ -96,22 +120,19 @@ export default function DashboardPage() {
     fetchWindowBookings();
   }, [fetchWindowBookings]);
 
-  // --- Fetch this user's own upcoming bookings ---
-  const fetchMyBookings = useCallback(async () => {
-    if (!session) return;
-    const { data } = await supabase
-      .from("bookings")
-      .select("*")
-      .eq("user_id", session.user.id)
-      .gt("end_time", new Date().toISOString());
-    if (data) setMyBookings(data as Booking[]);
-  }, [session]);
+  // --- Fetch every user's current/upcoming bookings, soonest first ---
+  // Filtered server-side against Postgres' now(), not the device's clock.
+  const fetchCurrentBookings = useCallback(async () => {
+    const { data, error } = await supabase.rpc("get_current_bookings");
+    if (error) console.error("Failed to load current bookings:", error.message);
+    if (data) setCurrentBookings(data as Booking[]);
+  }, []);
 
   useEffect(() => {
-    fetchMyBookings();
-  }, [fetchMyBookings]);
+    fetchCurrentBookings();
+  }, [fetchCurrentBookings]);
 
-  // --- Realtime: refresh both views whenever any booking changes ---
+  // --- Realtime: refresh both views whenever ANY user's booking changes ---
   useEffect(() => {
     const channel = supabase
       .channel("bookings-realtime")
@@ -120,7 +141,7 @@ export default function DashboardPage() {
         { event: "*", schema: "public", table: "bookings" },
         () => {
           fetchWindowBookings();
-          fetchMyBookings();
+          fetchCurrentBookings();
         }
       )
       .subscribe();
@@ -128,12 +149,69 @@ export default function DashboardPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [fetchWindowBookings, fetchMyBookings]);
+  }, [fetchWindowBookings, fetchCurrentBookings]);
+
+  // --- Clock-driven refresh: room colors (upcoming -> booked -> available
+  // again), the current-bookings list, and (if the filters are still at
+  // their auto-derived default) the default window itself all depend on
+  // elapsed time, not just on someone creating/canceling a booking --
+  // nothing else re-renders this page as time passes. Rather than poll
+  // blindly, schedule exactly one wake-up for the next moment something
+  // actually changes (server clock): a loaded booking's start_time or
+  // end_time, or -- if untouched -- the top of the next hour, since the
+  // default window is "now" and would otherwise stay pinned to whichever
+  // hour the page happened to load in. This effect re-runs on the fresh
+  // data/state and schedules the next wake-up after that.
+  useEffect(() => {
+    const MAX_DELAY_MS = 24 * 60 * 60 * 1000; // clamp: setTimeout overflows past ~24.8 days
+    const now = serverNowSync();
+    const nowMs = now.getTime();
+
+    const boundaries: number[] = [];
+    for (const b of windowBookings) {
+      const start = new Date(b.start_time).getTime();
+      const end = new Date(b.end_time).getTime();
+      if (start > nowMs) boundaries.push(start);
+      if (end > nowMs) boundaries.push(end);
+    }
+    for (const b of currentBookings) {
+      const end = new Date(b.end_time).getTime();
+      if (end > nowMs) boundaries.push(end);
+    }
+
+    if (!dateTimeTouchedRef.current) {
+      const nextHour = new Date(now);
+      nextHour.setMinutes(0, 0, 0);
+      nextHour.setHours(nextHour.getHours() + 1);
+      boundaries.push(nextHour.getTime());
+    }
+
+    if (boundaries.length === 0) return;
+
+    const delayMs = Math.min(Math.min(...boundaries) - nowMs, MAX_DELAY_MS) + 250;
+    const timeoutId = setTimeout(() => {
+      if (!dateTimeTouchedRef.current) {
+        serverNow().then((serverTime) => {
+          if (dateTimeTouchedRef.current) return; // touched while we were waiting on the RPC
+          setDate(dateStr(serverTime));
+          setStartTime(roundedTimeStr(serverTime, 0));
+          setEndTime(roundedTimeStr(serverTime, 1));
+        });
+      }
+      fetchWindowBookings();
+      fetchCurrentBookings();
+    }, delayMs);
+
+    return () => clearTimeout(timeoutId);
+  }, [windowBookings, currentBookings, fetchWindowBookings, fetchCurrentBookings]);
 
   function getStatus(room: Room): RoomStatus {
     if (selectedRoom?.id === room.id) return "selected";
-    const isBooked = windowBookings.some((b) => b.room_id === room.id);
-    return isBooked ? "booked" : "available";
+    const conflicts = windowBookings.filter((b) => b.room_id === room.id);
+    if (conflicts.length === 0) return "available";
+    const now = serverNowSync();
+    const inProgress = conflicts.some((b) => new Date(b.start_time) <= now);
+    return inProgress ? "booked" : "upcoming";
   }
 
   function handleRoomClick(room: Room) {
@@ -193,7 +271,10 @@ export default function DashboardPage() {
             type="date"
             value={date}
             min={todayStr()}
-            onChange={(e) => setDate(e.target.value)}
+            onChange={(e) => {
+              dateTimeTouchedRef.current = true;
+              setDate(e.target.value);
+            }}
             className="blueprint-input px-3 py-2"
           />
         </div>
@@ -204,7 +285,10 @@ export default function DashboardPage() {
           <input
             type="time"
             value={startTime}
-            onChange={(e) => setStartTime(e.target.value)}
+            onChange={(e) => {
+              dateTimeTouchedRef.current = true;
+              setStartTime(e.target.value);
+            }}
             className="blueprint-input px-3 py-2"
           />
         </div>
@@ -215,7 +299,10 @@ export default function DashboardPage() {
           <input
             type="time"
             value={endTime}
-            onChange={(e) => setEndTime(e.target.value)}
+            onChange={(e) => {
+              dateTimeTouchedRef.current = true;
+              setEndTime(e.target.value);
+            }}
             className="blueprint-input px-3 py-2"
           />
         </div>
@@ -231,11 +318,12 @@ export default function DashboardPage() {
           getStatus={getStatus}
           onRoomClick={handleRoomClick}
         />
-        <MyBookings
-          bookings={myBookings}
+        <CurrentBookings
+          bookings={currentBookings}
           rooms={rooms}
+          currentUserId={session?.user.id ?? ""}
           onChanged={() => {
-            fetchMyBookings();
+            fetchCurrentBookings();
             fetchWindowBookings();
           }}
         />
@@ -252,7 +340,7 @@ export default function DashboardPage() {
           onBooked={() => {
             setSelectedRoom(null);
             fetchWindowBookings();
-            fetchMyBookings();
+            fetchCurrentBookings();
           }}
         />
       )}

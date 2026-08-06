@@ -8,6 +8,7 @@ import { ALLOWED_EMAIL_DOMAIN, isAllowedEmail } from "@/lib/auth";
 
 export default function SignupPage() {
   const router = useRouter();
+  const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -28,6 +29,9 @@ export default function SignupPage() {
     const { error } = await supabase.auth.signUp({
       email,
       password,
+      options: {
+        data: { full_name: fullName.trim() },
+      },
     });
 
     setLoading(false);
@@ -62,6 +66,20 @@ export default function SignupPage() {
           </div>
         ) : (
           <form onSubmit={handleSignup} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">
+                Full name
+              </label>
+              <input
+                type="text"
+                required
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                className="blueprint-input w-full px-3 py-2 rounded-none"
+                placeholder="e.g. Raman Lamba"
+              />
+            </div>
+
             <div>
               <label className="block text-sm font-medium mb-1">Email</label>
               <input
