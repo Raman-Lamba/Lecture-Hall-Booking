@@ -305,3 +305,81 @@ create policy "admins can update any booking"
   to authenticated
   using (public.is_admin())
   with check (public.is_admin());
+
+-- ============================================
+-- 12. ADMIN EDIT / BUMP RPC
+-- ============================================
+create or replace function public.admin_edit_booking(
+  p_booking_id uuid,
+  p_room_id uuid,
+  p_title text,
+  p_start_time timestamptz,
+  p_end_time timestamptz,
+  p_reason text,
+  p_confirm_bump boolean default false
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_conflicts jsonb;
+begin
+  if not public.is_admin() then
+    raise exception 'Only admins can edit other bookings';
+  end if;
+
+  if p_reason is null or btrim(p_reason) = '' then
+    raise exception 'A reason is required';
+  end if;
+
+  if p_end_time <= p_start_time then
+    raise exception 'End time must be after start time';
+  end if;
+
+  select jsonb_agg(jsonb_build_object(
+           'id', b.id,
+           'title', b.title,
+           'user_name', b.user_name,
+           'start_time', b.start_time,
+           'end_time', b.end_time
+         ))
+    into v_conflicts
+    from public.bookings b
+    where b.room_id = p_room_id
+      and b.status = 'active'
+      and b.id <> p_booking_id
+      and tstzrange(b.start_time, b.end_time) && tstzrange(p_start_time, p_end_time);
+
+  if v_conflicts is not null and not p_confirm_bump then
+    return jsonb_build_object('status', 'conflict', 'conflicts', v_conflicts);
+  end if;
+
+  if v_conflicts is not null then
+    update public.bookings
+      set status = 'cancelled',
+          last_edited_by = auth.uid(),
+          last_edited_reason = p_reason,
+          last_edited_at = now()
+      where room_id = p_room_id
+        and status = 'active'
+        and id <> p_booking_id
+        and tstzrange(start_time, end_time) && tstzrange(p_start_time, p_end_time);
+  end if;
+
+  update public.bookings
+    set room_id = p_room_id,
+        title = p_title,
+        start_time = p_start_time,
+        end_time = p_end_time,
+        last_edited_by = auth.uid(),
+        last_edited_reason = p_reason,
+        last_edited_at = now()
+    where id = p_booking_id;
+
+  return jsonb_build_object('status', 'ok');
+end;
+$$;
+
+grant execute on function public.admin_edit_booking to authenticated;
