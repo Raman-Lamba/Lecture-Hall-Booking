@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { computeBookingRange } from "@/lib/time";
+import { serverNow } from "@/lib/serverClock";
 import type { Booking, Room } from "@/types";
 
 interface AdminEditBookingModalProps {
@@ -11,6 +12,9 @@ interface AdminEditBookingModalProps {
   onClose: () => void;
   onSaved: () => void;
 }
+
+// Postgres exclusion constraint violation code
+const EXCLUSION_VIOLATION = "23P01";
 
 function dateStrFromISO(iso: string) {
   const d = new Date(iso);
@@ -43,7 +47,17 @@ export default function AdminEditBookingModal({
     { id: string; title: string; user_name: string; start_time: string; end_time: string }[]
   >([]);
 
-  async function submit(confirmBump: boolean) {
+  const { crossesMidnight } = useMemo(
+    () => computeBookingRange(date, startTime, endTime),
+    [date, startTime, endTime]
+  );
+
+  const roomName = rooms.find((r) => r.id === roomId)?.name ?? "This room";
+
+  async function submit(
+    confirmBump: boolean,
+    confirmedConflictIds: string[] | null
+  ) {
     setError(null);
     const { startISO, endISO } = computeBookingRange(date, startTime, endTime);
 
@@ -56,11 +70,18 @@ export default function AdminEditBookingModal({
       p_end_time: endISO,
       p_reason: reason.trim(),
       p_confirm_bump: confirmBump,
+      p_confirmed_conflict_ids: confirmedConflictIds,
     });
     setLoading(false);
 
     if (rpcError) {
-      setError(rpcError.message);
+      if (rpcError.code === EXCLUSION_VIOLATION) {
+        setError(
+          `${roomName} is already booked for part of that time window. Pick a different time.`
+        );
+      } else {
+        setError(rpcError.message);
+      }
       return;
     }
 
@@ -86,11 +107,21 @@ export default function AdminEditBookingModal({
       return;
     }
 
-    await submit(false);
+    const { startISO } = computeBookingRange(date, startTime, endTime);
+
+    if (new Date(startISO) < (await serverNow())) {
+      setError("You can't book a time in the past.");
+      return;
+    }
+
+    await submit(false, null);
   }
 
   function handleConfirmBump() {
-    submit(true);
+    submit(
+      true,
+      conflicts.map((c) => c.id)
+    );
   }
 
   function handleBack() {
@@ -109,7 +140,7 @@ export default function AdminEditBookingModal({
         {step === "confirm" ? (
           <div className="space-y-4">
             <p className="text-sm text-ink/80">
-              {rooms.find((r) => r.id === roomId)?.name ?? "This room"} is already
+              {roomName} is already
               booked for part of that window. Confirming will cancel the following
               booking(s):
             </p>
@@ -215,6 +246,12 @@ export default function AdminEditBookingModal({
                 />
               </div>
             </div>
+
+            {crossesMidnight && (
+              <p className="text-xs text-blueprint font-mono">
+                Ends the next day ({endTime} on the day after {date}).
+              </p>
+            )}
 
             <div>
               <label className="block text-sm font-medium mb-1">
