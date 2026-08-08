@@ -8,14 +8,18 @@ interface CurrentBookingsProps {
   bookings: Booking[];
   rooms: Room[];
   currentUserId: string;
+  isAdmin: boolean;
   onChanged: () => void;
+  onEditRequest: (booking: Booking) => void;
 }
 
 export default function CurrentBookings({
   bookings,
   rooms,
   currentUserId,
+  isAdmin,
   onChanged,
+  onEditRequest,
 }: CurrentBookingsProps) {
   const [cancelingId, setCancelingId] = useState<string | null>(null);
 
@@ -92,15 +96,25 @@ export default function CurrentBookings({
                     </p>
                   )}
                 </div>
-                {!cancelled && b.user_id === currentUserId && (
-                  <button
-                    onClick={() => cancelBooking(b.id)}
-                    disabled={cancelingId === b.id}
-                    className="text-xs font-mono text-booked border border-booked px-2 py-1 hover:bg-booked hover:text-paper disabled:opacity-50"
-                  >
-                    {cancelingId === b.id ? "..." : "Cancel"}
-                  </button>
-                )}
+                <div className="flex gap-2">
+                  {isAdmin && !cancelled && (
+                    <button
+                      onClick={() => onEditRequest(b)}
+                      className="text-xs font-mono text-blueprint border border-blueprint px-2 py-1 hover:bg-blueprint hover:text-paper"
+                    >
+                      Edit
+                    </button>
+                  )}
+                  {!cancelled && b.user_id === currentUserId && (
+                    <button
+                      onClick={() => cancelBooking(b.id)}
+                      disabled={cancelingId === b.id}
+                      className="text-xs font-mono text-booked border border-booked px-2 py-1 hover:bg-booked hover:text-paper disabled:opacity-50"
+                    >
+                      {cancelingId === b.id ? "..." : "Cancel"}
+                    </button>
+                  )}
+                </div>
               </li>
             );
           })}

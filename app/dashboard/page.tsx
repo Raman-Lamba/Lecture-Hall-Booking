@@ -9,6 +9,7 @@ import { computeBookingRange } from "@/lib/time";
 import { serverNow, serverNowSync } from "@/lib/serverClock";
 import BookingModal from "@/components/BookingModal";
 import CurrentBookings from "@/components/CurrentBookings";
+import AdminEditBookingModal from "@/components/AdminEditBookingModal";
 import type { Room, Booking, RoomStatus } from "@/types";
 
 // 3D scene uses browser-only APIs (WebGL), so load it client-side only
@@ -56,6 +57,8 @@ export default function DashboardPage() {
   const dateTimeTouchedRef = useRef(false);
 
   const [selectedRoom, setSelectedRoom] = useState<Room | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [editingBooking, setEditingBooking] = useState<Booking | null>(null);
 
   // Correct the default date/time window against the server's clock once
   // on mount, in case the device's system clock is wrong (not just its
@@ -101,6 +104,20 @@ export default function DashboardPage() {
         if (data) setRooms(data as Room[]);
       });
   }, []);
+
+  // --- Fetch the signed-in user's own role, to gate admin-only UI ---
+  useEffect(() => {
+    if (!session) {
+      setIsAdmin(false);
+      return;
+    }
+    supabase
+      .from("profiles")
+      .select("role")
+      .eq("id", session.user.id)
+      .single()
+      .then(({ data }) => setIsAdmin(data?.role === "admin"));
+  }, [session]);
 
   // --- Fetch bookings overlapping the currently selected window ---
   const fetchWindowBookings = useCallback(async () => {
@@ -322,10 +339,12 @@ export default function DashboardPage() {
           bookings={currentBookings}
           rooms={rooms}
           currentUserId={session?.user.id ?? ""}
+          isAdmin={isAdmin}
           onChanged={() => {
             fetchCurrentBookings();
             fetchWindowBookings();
           }}
+          onEditRequest={setEditingBooking}
         />
       </div>
 
@@ -341,6 +360,19 @@ export default function DashboardPage() {
             setSelectedRoom(null);
             fetchWindowBookings();
             fetchCurrentBookings();
+          }}
+        />
+      )}
+
+      {editingBooking && (
+        <AdminEditBookingModal
+          booking={editingBooking}
+          rooms={rooms}
+          onClose={() => setEditingBooking(null)}
+          onSaved={() => {
+            setEditingBooking(null);
+            fetchCurrentBookings();
+            fetchWindowBookings();
           }}
         />
       )}
