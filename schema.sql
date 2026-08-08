@@ -263,3 +263,45 @@ create trigger trg_handle_new_user
 insert into public.profiles (id, role)
 select id, 'member' from auth.users
 on conflict (id) do nothing;
+
+-- ============================================
+-- 11. ADMIN OVERRIDE SUPPORT ON BOOKINGS
+-- ============================================
+alter table bookings add column if not exists status text not null default 'active'
+  check (status in ('active', 'cancelled'));
+alter table bookings add column if not exists last_edited_by uuid references auth.users(id);
+alter table bookings add column if not exists last_edited_reason text;
+alter table bookings add column if not exists last_edited_at timestamptz;
+
+-- Overlap prevention only applies to still-active bookings, so a
+-- soft-cancelled (admin-bumped) booking frees its slot immediately.
+alter table bookings drop constraint if exists no_overlapping_bookings;
+alter table bookings
+  add constraint no_overlapping_bookings
+  exclude using gist (
+    room_id with =,
+    tstzrange(start_time, end_time) with &&
+  )
+  where (status = 'active');
+
+create or replace function public.is_admin()
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select coalesce(
+    (select role = 'admin' from public.profiles where id = auth.uid()),
+    false
+  );
+$$;
+
+grant execute on function public.is_admin to authenticated;
+
+drop policy if exists "admins can update any booking" on bookings;
+create policy "admins can update any booking"
+  on bookings for update
+  to authenticated
+  using (public.is_admin())
+  with check (public.is_admin());
