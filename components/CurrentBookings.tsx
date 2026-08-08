@@ -62,29 +62,48 @@ export default function CurrentBookings({
         </p>
       ) : (
         <ul className="space-y-3">
-          {sorted.map((b) => (
-            <li
-              key={b.id}
-              className="flex items-center justify-between border border-ink/20 px-3 py-2"
-            >
-              <div>
-                <p className="font-mono font-medium text-sm">
-                  {roomName(b.room_id)} — {b.title}
-                </p>
-                <p className="text-xs text-ink/60">{formatRange(b)}</p>
-                <p className="text-xs text-ink/60">Booked by {b.user_name}</p>
-              </div>
-              {b.user_id === currentUserId && (
-                <button
-                  onClick={() => cancelBooking(b.id)}
-                  disabled={cancelingId === b.id}
-                  className="text-xs font-mono text-booked border border-booked px-2 py-1 hover:bg-booked hover:text-paper disabled:opacity-50"
-                >
-                  {cancelingId === b.id ? "..." : "Cancel"}
-                </button>
-              )}
-            </li>
-          ))}
+          {sorted.map((b) => {
+            const cancelled = b.status === "cancelled";
+            return (
+              <li
+                key={b.id}
+                className={`flex items-center justify-between border border-ink/20 px-3 py-2 ${
+                  cancelled ? "opacity-60" : ""
+                }`}
+              >
+                <div>
+                  <p
+                    className={`font-mono font-medium text-sm ${
+                      cancelled ? "line-through" : ""
+                    }`}
+                  >
+                    {roomName(b.room_id)} — {b.title}
+                  </p>
+                  <p className="text-xs text-ink/60">{formatRange(b)}</p>
+                  <p className="text-xs text-ink/60">Booked by {b.user_name}</p>
+                  {cancelled && (
+                    <p className="text-xs text-booked font-mono mt-1">
+                      CANCELLED BY ADMIN — Reason: &quot;{b.last_edited_reason}&quot;
+                    </p>
+                  )}
+                  {!cancelled && b.last_edited_reason && (
+                    <p className="text-xs text-blueprint font-mono mt-1">
+                      Rescheduled by admin — &quot;{b.last_edited_reason}&quot;
+                    </p>
+                  )}
+                </div>
+                {!cancelled && b.user_id === currentUserId && (
+                  <button
+                    onClick={() => cancelBooking(b.id)}
+                    disabled={cancelingId === b.id}
+                    className="text-xs font-mono text-booked border border-booked px-2 py-1 hover:bg-booked hover:text-paper disabled:opacity-50"
+                  >
+                    {cancelingId === b.id ? "..." : "Cancel"}
+                  </button>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>

@@ -18,6 +18,10 @@ export interface Booking {
   start_time: string; // ISO timestamp
   end_time: string; // ISO timestamp
   created_at: string;
+  status: "active" | "cancelled";
+  last_edited_by: string | null;
+  last_edited_reason: string | null;
+  last_edited_at: string | null;
 }
 
 export type RoomStatus = "available" | "booked" | "upcoming" | "selected";
