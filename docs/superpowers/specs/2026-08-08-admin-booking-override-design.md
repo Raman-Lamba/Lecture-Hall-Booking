@@ -23,25 +23,71 @@ updates, server-clock-based time) stays as-is.
 
 ## Admin identity
 
-Hardcoded email allowlist, not a `profiles` table or user-metadata flag —
-smallest change, matches the existing `ALLOWED_EMAIL_DOMAIN` pattern in
-`lib/auth.ts`, and admin turnover is expected to be rare enough that a code
-deploy + SQL migration per change is acceptable.
+A `profiles` table holding a `role` per user, defaulting every new signup to
+`'member'`. Promoting someone to admin is a single SQL statement run
+out-of-band (Supabase SQL Editor), and — critically — **no client, including
+an authenticated but non-admin one, can write to `role` at all**: there's no
+`insert`/`update` RLS policy on `profiles` granting that to regular users, so
+self-promotion isn't just checked against, it has no permission path to
+attempt in the first place.
 
-`lib/auth.ts` adds:
+```sql
+create table profiles (
+  id         uuid primary key references auth.users(id) on delete cascade,
+  role       text not null default 'member' check (role in ('member', 'admin')),
+  created_at timestamptz not null default now()
+);
 
-```ts
-export const ADMIN_EMAILS = ["dean@imthyderabad.edu.in"]; // placeholder — edit as needed
+alter table profiles enable row level security;
 
-export function isAdmin(email: string): boolean {
-  return ADMIN_EMAILS.includes(email.trim().toLowerCase());
-}
+-- Every signed-in user can read their own role (needed so the frontend can
+-- decide whether to show admin controls). No one else's row is exposed.
+create policy "users can view their own profile"
+  on profiles for select
+  to authenticated
+  using (auth.uid() = id);
+
+-- Deliberately no insert/update/delete policy for `authenticated` here.
+-- The only way a row's role changes is a superuser running SQL directly
+-- (e.g. the Supabase SQL Editor), which connects as the table owner and
+-- is exempt from RLS. There is no code path — API, RPC, or otherwise —
+-- that lets a signed-in user write their own or anyone else's role.
 ```
 
-This list must be kept in sync with the hardcoded list inside the
-`public.is_admin()` SQL function below — there are intentionally two copies
-(client-side for UI gating, server-side for actual authorization), and nothing
-enforces they match. A comment in each file points at the other.
+A row is created automatically for every new signup, same pattern already
+used for `restrict_signup_domain` (an Auth Hook) and `set_booking_user_name`
+(a trigger) — this one's a trigger on `auth.users`, owned by the table
+owner, so it runs unaffected by the RLS above:
+
+```sql
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  insert into public.profiles (id, role) values (new.id, 'member');
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_handle_new_user on auth.users;
+create trigger trg_handle_new_user
+  after insert on auth.users
+  for each row
+  execute function public.handle_new_user();
+```
+
+**To make someone an admin**, run this once in the Supabase SQL Editor:
+
+```sql
+update public.profiles set role = 'admin'
+where id = (select id from auth.users where email = 'the-new-admin@imthyderabad.edu.in');
+```
+
+No code deploy needed — this is the main advantage over the hardcoded-list
+approach considered earlier.
 
 ## Data model changes (`schema.sql`)
 
@@ -91,13 +137,18 @@ stable
 security definer
 set search_path = ''
 as $$
-  select coalesce(auth.email(), '') = any (array[
-    'dean@imthyderabad.edu.in'  -- keep in sync with lib/auth.ts ADMIN_EMAILS
-  ]);
+  select coalesce(
+    (select role = 'admin' from public.profiles where id = auth.uid()),
+    false
+  );
 $$;
 
 grant execute on function public.is_admin to authenticated;
 ```
+
+`security definer` here just lets the function read `profiles` regardless of
+the caller's own RLS visibility (moot in practice, since it only ever looks
+up `auth.uid()`'s own row, which the `select` policy above already allows).
 
 ### RLS
 
@@ -209,15 +260,17 @@ Notes:
 
 ## Frontend
 
-### `lib/auth.ts`
-Add `ADMIN_EMAILS` / `isAdmin()` as above.
-
 ### `app/dashboard/page.tsx`
-Compute `const admin = isAdmin(session?.user.email ?? "")` and pass it to
-`CurrentBookings` as a new `isAdmin` prop. No other changes — the existing
-realtime subscription already refetches both `windowBookings` and
-`currentBookings` on any change to the `bookings` table, so admin
-edits/bumps propagate to every open tab without new plumbing.
+On session load, fetch the signed-in user's own role:
+```ts
+const { data } = await supabase.from("profiles").select("role").eq("id", session.user.id).single();
+setIsAdmin(data?.role === "admin");
+```
+Store it in state and pass it to `CurrentBookings` as a new `isAdmin` prop.
+No other changes — the existing realtime subscription already refetches both
+`windowBookings` and `currentBookings` on any change to the `bookings`
+table, so admin edits/bumps propagate to every open tab without new
+plumbing.
 
 ### `components/CurrentBookings.tsx`
 - New `isAdmin: boolean` prop.
@@ -254,6 +307,13 @@ Sibling to `BookingModal.tsx`, reusing `computeBookingRange` and
    without resubmitting.
 
 ### `types/index.ts`
+Add:
+```ts
+export interface Profile {
+  id: string;
+  role: "member" | "admin";
+}
+```
 `Booking` gains:
 ```ts
 status: "active" | "cancelled";
@@ -266,8 +326,9 @@ last_edited_at: string | null;
 
 - Self-edit for regular members (they can still only create + cancel their
   own bookings; editing is admin-only).
-- A `profiles`/roles table or any admin-management UI — admins are a
-  hardcoded list edited by a developer.
+- Any in-app admin-management UI — promoting someone to admin is a SQL
+  statement run directly against the database by whoever has that access,
+  not a feature of the app itself.
 - Full audit-history table — only the latest edit's reason/admin/timestamp
   is kept per booking.
 - Notifications (email/push) to the bumped user — they see the reason next
@@ -276,11 +337,17 @@ last_edited_at: string | null;
 
 ## Testing
 
-- Manual: sign in as a non-admin, confirm no Edit button appears anywhere.
-- Manual: sign in as an admin (email in `ADMIN_EMAILS`), edit another
-  member's booking with no conflict → title/room/time update, reason shows
-  as "Rescheduled by admin" on the row, realtime-propagates to a second
-  browser tab.
+- Manual: sign up a new user, confirm a `profiles` row with `role='member'`
+  is auto-created, and that no Edit button appears anywhere for them.
+- Manual: as that non-admin user, attempt `supabase.from('profiles').update({
+  role: 'admin' }).eq('id', ...)` directly from the browser console →
+  confirm RLS rejects it (no rows updated / permission error).
+- Manual: promote a user to admin via the SQL Editor `update` statement,
+  confirm they see the Edit button after their next `profiles` fetch
+  (re-login or refresh).
+- Manual: sign in as that admin, edit another member's booking with no
+  conflict → title/room/time update, reason shows as "Rescheduled by admin"
+  on the row, realtime-propagates to a second browser tab.
 - Manual: admin edits a booking into an occupied slot → confirm step lists
   the right conflicting booking → confirm → conflicting booking shows
   struck-through with reason, target booking shows in its new slot.
