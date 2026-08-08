@@ -43,9 +43,35 @@ of what's expected.
   bookings"; `data` is `null`. **This confirms a non-admin cannot bypass
   the UI and call the admin function directly.**
 
-  Note: `supabase` is not available in the console by default on this
-  build — ask the developer whether a debug hook is enabled, or skip this
-  specific check.
+  If `supabase` isn't defined in your console, ask the developer to add
+  this one temporary line to `lib/supabase/client.ts`, right after the
+  `export const supabase = createClient(...)` block, restart the dev
+  server, and remove it again after testing is done:
+  ```ts
+  if (typeof window !== "undefined") (window as any).supabase = supabase;
+  ```
+
+- [ ] While you're in the console (same account, still not promoted to
+      admin), also confirm the RPC's server-side reason check by leaving
+      `p_reason` empty/whitespace — paste this:
+  ```js
+  (async () => {
+    const { data, error } = await supabase.rpc('admin_edit_booking', {
+      p_booking_id: '00000000-0000-0000-0000-000000000000',
+      p_room_id: '00000000-0000-0000-0000-000000000000',
+      p_title: 'x',
+      p_start_time: new Date().toISOString(),
+      p_end_time: new Date(Date.now() + 3600000).toISOString(),
+      p_reason: '   ',
+    });
+    console.log({ data, error });
+  })();
+  ```
+  Expected: `error` is set (either the "Only admins..." message, since
+  this account isn't an admin, or — if you happen to be testing this as
+  an already-promoted admin — "A reason is required"). Either way, `data`
+  is `null`. **This confirms the reason requirement is enforced by the
+  database itself, not just by graying out the Save button in the UI.**
 
 ## Part 2 — Getting promoted to admin
 
@@ -88,12 +114,24 @@ where id = (select id from auth.users where email = 'YOUR_EMAIL_HERE');
 - [ ] Expected: instead of saving immediately, you see a **confirmation
       screen** listing Booking A as a conflict, with a button like "Bump
       conflicting booking & save".
-- [ ] Click that button.
+- [ ] Click **Back** instead of confirming. Confirm you land back on the
+      edit form with the room/title/date/time/reason you'd already typed
+      still filled in (nothing reset), and confirm nothing was actually
+      saved — Booking A and Booking B are both unchanged (check Current
+      Bookings or refresh).
+- [ ] Re-enter the overlapping time (or just click Save again if your
+      changes are still there) to get back to the confirmation screen,
+      then click **"Bump conflicting booking & save"**.
 - [ ] Confirm:
   - Booking A now shows **struck through**, with a badge like
     "CANCELLED BY ADMIN" and your reason.
   - Booking B now shows in its **new time** with "Rescheduled by admin"
     and the same reason.
+- [ ] If you have a second browser tab (or a second device) logged in as
+      a different user, confirm the bump — Booking A's cancellation and
+      Booking B's new time — shows up there too within a second or two,
+      without needing a manual refresh (not just a plain edit — the bump
+      case specifically).
 - [ ] Try booking Booking A's **original time slot** again (same room,
       same original time). It should succeed — the slot should be free,
       even though Booking A's row is still visible (struck through) in
@@ -126,9 +164,42 @@ where id = (select id from auth.users where email = 'YOUR_EMAIL_HERE');
       update silently affects zero rows. Confirm you still don't have an
       Edit button after this (i.e. you did NOT actually become an admin).
 
-  Note: `supabase` is not available in the console by default on this
-  build — ask the developer whether a debug hook is enabled, or skip this
-  specific check.
+  If `supabase` isn't defined in your console, ask the developer to add
+  this one temporary line to `lib/supabase/client.ts`, right after the
+  `export const supabase = createClient(...)` block, restart the dev
+  server, and remove it again after testing is done:
+  ```ts
+  if (typeof window !== "undefined") (window as any).supabase = supabase;
+  ```
+
+- [ ] Still as this non-admin account, pick any existing booking (yours or
+      someone else's — grab its id from Current Bookings, e.g. from the
+      network tab, or ask the developer for one) and try to edit it
+      directly, bypassing the UI entirely:
+  ```js
+  (async () => {
+    const { data, error } = await supabase
+      .from('bookings')
+      .update({ title: 'hacked by non-admin' })
+      .eq('id', 'PASTE_A_BOOKING_ID_HERE')
+      .select();
+    console.log({ data, error });
+  })();
+  ```
+  Expected: `data` is an empty array `[]` (or `error` is set) — the update
+  affects zero rows. Confirm the booking's title is unchanged in Current
+  Bookings. **This confirms a non-admin cannot edit bookings via a direct
+  API call even though they lack an Edit button in the UI.**
+
+## Part 7 — Pre-existing bookings still work
+
+- [ ] Find (or create, then treat as "pre-existing" for this check) a
+      booking that has no admin-edit history — i.e. it has never shown a
+      "Rescheduled by admin" or "CANCELLED BY ADMIN" line.
+- [ ] Confirm it still displays normally in Current Bookings (title, room,
+      time, booked-by name), with no edit/bump badge.
+- [ ] As the account that made it, confirm you can still **self-cancel**
+      it exactly as before (no admin involvement needed).
 
 ---
 
