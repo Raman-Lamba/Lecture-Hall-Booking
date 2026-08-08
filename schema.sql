@@ -378,6 +378,10 @@ begin
         last_edited_at = now()
     where id = p_booking_id;
 
+  if not found then
+    raise exception 'Booking not found';
+  end if;
+
   return jsonb_build_object('status', 'ok');
 end;
 $$;
