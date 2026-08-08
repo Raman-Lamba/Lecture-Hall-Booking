@@ -214,3 +214,52 @@ as $$
 $$;
 
 grant execute on function public.get_current_bookings to authenticated;
+
+-- ============================================
+-- 10. PROFILES TABLE + ROLE-BASED ADMIN ACCESS
+-- ============================================
+-- Every signed-in user gets a profile row with role='member' by default.
+-- Regular users have NO write access to this table at all (no insert/
+-- update/delete policy is granted to `authenticated`), so becoming an
+-- admin is never something a client can trigger -- only a direct SQL
+-- statement run by whoever has database access (see README) can do it.
+create table if not exists profiles (
+  id         uuid primary key references auth.users(id) on delete cascade,
+  role       text not null default 'member' check (role in ('member', 'admin')),
+  created_at timestamptz not null default now()
+);
+
+alter table profiles enable row level security;
+
+drop policy if exists "users can view their own profile" on profiles;
+create policy "users can view their own profile"
+  on profiles for select
+  to authenticated
+  using (auth.uid() = id);
+
+-- Auto-create a profile row for every new signup.
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  insert into public.profiles (id, role) values (new.id, 'member');
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_handle_new_user on auth.users;
+create trigger trg_handle_new_user
+  after insert on auth.users
+  for each row
+  execute function public.handle_new_user();
+
+-- Backfill: anyone who signed up before this migration ran doesn't have a
+-- profiles row yet (the trigger above only fires on new inserts). Without
+-- this, promoting an existing user to admin later would silently update
+-- zero rows.
+insert into public.profiles (id, role)
+select id, 'member' from auth.users
+on conflict (id) do nothing;
