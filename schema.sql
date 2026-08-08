@@ -387,3 +387,166 @@ end;
 $$;
 
 grant execute on function public.admin_edit_booking to authenticated;
+
+-- ============================================
+-- 13. FINAL-REVIEW FIXES
+-- ============================================
+-- Two follow-ups from the whole-branch review, on top of what sections 11
+-- and 12 already set up. Both statements below are idempotent and safe to
+-- re-run in the SQL Editor even though sections 11/12 have already been
+-- applied to the live database -- nothing here drops a column or table.
+
+-- --------------------------------------------
+-- 13a. Close the direct-REST-API bypass around admin_edit_booking's
+-- mandatory-reason check.
+-- --------------------------------------------
+-- The policy added in section 11 let any admin session run a plain
+-- `supabase.from("bookings").update(...)` and change a booking (including
+-- its status/room/time) without ever going through admin_edit_booking --
+-- so the "a reason is required" rule was only enforced by the RPC, not by
+-- the database. Tightening `with check` here makes the reason requirement
+-- a genuine row-level invariant: ANY update by an admin, through ANY path,
+-- must leave a non-empty last_edited_reason, or Postgres rejects it.
+-- admin_edit_booking itself is unaffected -- it's `security definer`, so
+-- it bypasses RLS (and therefore this policy) entirely either way.
+drop policy if exists "admins can update any booking" on bookings;
+create policy "admins can update any booking"
+  on bookings for update
+  to authenticated
+  using (public.is_admin())
+  with check (public.is_admin() and coalesce(btrim(last_edited_reason), '') <> '');
+
+-- --------------------------------------------
+-- 13b. admin_edit_booking: verify the confirmed bump set still matches
+-- reality before bumping.
+-- --------------------------------------------
+-- Previously, confirming a bump re-ran the RPC's conflict query from
+-- scratch and bumped whatever it found *at that moment* -- not
+-- necessarily the same bookings the confirm dialog showed the admin. If a
+-- new conflicting booking appeared in the gap between the confirm dialog
+-- rendering and the admin clicking "confirm", it would get silently swept
+-- into the bump without ever being shown. The whole call is one
+-- transaction, so this was never a data-corruption risk, but it broke the
+-- confirm dialog's promise to only cancel the bookings it named.
+--
+-- p_confirmed_conflict_ids is the new, optional parameter: the frontend
+-- now passes back the exact set of booking ids it displayed on the
+-- confirm step. When that's provided alongside p_confirm_bump = true, the
+-- function re-checks that the currently-conflicting active bookings are
+-- EXACTLY that set (as sets -- order/duplicates don't matter) before
+-- bumping. Any mismatch (a new conflict appeared, or a previously-shown
+-- one stopped conflicting) returns a fresh 'conflict' response with the
+-- up-to-date list, so the frontend re-shows the confirm step instead of
+-- bumping a different set than what was approved.
+--
+-- When p_confirmed_conflict_ids is null (its default -- used by the
+-- initial, non-confirming call, which has no confirmed set to pass yet),
+-- behavior is byte-for-byte identical to before: no set comparison, just
+-- bump whatever is currently conflicting.
+--
+-- `create or replace function` cannot add a parameter to an existing
+-- function in place -- Postgres identifies functions by their full
+-- argument-type signature, so appending p_confirmed_conflict_ids would
+-- otherwise create a second, overloaded 8-argument function alongside the
+-- original 7-argument one rather than truly replacing it, leaving both
+-- installed and risking "function is not unique" errors on calls that
+-- omit the new parameter. Dropping the old signature first avoids that.
+drop function if exists public.admin_edit_booking(
+  uuid, uuid, text, timestamptz, timestamptz, text, boolean
+);
+
+create or replace function public.admin_edit_booking(
+  p_booking_id uuid,
+  p_room_id uuid,
+  p_title text,
+  p_start_time timestamptz,
+  p_end_time timestamptz,
+  p_reason text,
+  p_confirm_bump boolean default false,
+  p_confirmed_conflict_ids uuid[] default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_conflicts jsonb;
+  v_conflict_ids uuid[];
+begin
+  if not public.is_admin() then
+    raise exception 'Only admins can edit other bookings';
+  end if;
+
+  if p_reason is null or btrim(p_reason) = '' then
+    raise exception 'A reason is required';
+  end if;
+
+  if p_end_time <= p_start_time then
+    raise exception 'End time must be after start time';
+  end if;
+
+  select jsonb_agg(jsonb_build_object(
+           'id', b.id,
+           'title', b.title,
+           'user_name', b.user_name,
+           'start_time', b.start_time,
+           'end_time', b.end_time
+         )),
+         array_agg(b.id)
+    into v_conflicts, v_conflict_ids
+    from public.bookings b
+    where b.room_id = p_room_id
+      and b.status = 'active'
+      and b.id <> p_booking_id
+      and tstzrange(b.start_time, b.end_time) && tstzrange(p_start_time, p_end_time);
+
+  if v_conflicts is not null and not p_confirm_bump then
+    return jsonb_build_object('status', 'conflict', 'conflicts', v_conflicts);
+  end if;
+
+  -- Only compare sets when the caller actually supplied a confirmed set
+  -- (the initial, non-confirming call never has one to pass yet -- see
+  -- comment above).
+  if v_conflicts is not null and p_confirm_bump and p_confirmed_conflict_ids is not null then
+    if not (
+      v_conflict_ids <@ p_confirmed_conflict_ids
+      and p_confirmed_conflict_ids <@ v_conflict_ids
+    ) then
+      return jsonb_build_object('status', 'conflict', 'conflicts', v_conflicts);
+    end if;
+  end if;
+
+  if v_conflicts is not null then
+    update public.bookings
+      set status = 'cancelled',
+          last_edited_by = auth.uid(),
+          last_edited_reason = p_reason,
+          last_edited_at = now()
+      where room_id = p_room_id
+        and status = 'active'
+        and id <> p_booking_id
+        and tstzrange(start_time, end_time) && tstzrange(p_start_time, p_end_time);
+  end if;
+
+  update public.bookings
+    set room_id = p_room_id,
+        title = p_title,
+        start_time = p_start_time,
+        end_time = p_end_time,
+        last_edited_by = auth.uid(),
+        last_edited_reason = p_reason,
+        last_edited_at = now()
+    where id = p_booking_id;
+
+  if not found then
+    raise exception 'Booking not found';
+  end if;
+
+  return jsonb_build_object('status', 'ok');
+end;
+$$;
+
+grant execute on function public.admin_edit_booking(
+  uuid, uuid, text, timestamptz, timestamptz, text, boolean, uuid[]
+) to authenticated;

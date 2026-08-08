@@ -127,6 +127,7 @@ export default function DashboardPage() {
     const { data } = await supabase
       .from("bookings")
       .select("*")
+      .eq("status", "active")
       .lt("start_time", endISO)
       .gt("end_time", startISO);
 
