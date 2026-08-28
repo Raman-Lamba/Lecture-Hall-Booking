@@ -149,6 +149,37 @@ where id = (select id from auth.users where email = 'YOUR_EMAIL_HERE');
 - [ ] Refresh Current Bookings. Confirm the cancelled booking has
       **disappeared** from the list on its own — no manual cleanup needed.
 
+## Part 6.5 — Self-cancel lock after an admin edit
+
+- [ ] Log in as a non-admin user. Create a booking.
+- [ ] Confirm you can see and use its Cancel button (baseline — no admin
+      involvement yet).
+- [ ] Create a second booking. Ask an admin (or, if you have access,
+      promote yourself temporarily) to Edit that second booking's
+      time/room/title with any reason, no conflict needed.
+- [ ] Back as the original (non-admin) owner, refresh Current Bookings.
+      Confirm: the edited booking now reads `Rescheduled by admin —
+      "<reason>" · Cancellation now requires an admin.` and its **Cancel
+      button is gone** — even though you're still its owner.
+- [ ] Confirm your *other*, untouched booking from the first step still
+      has its Cancel button and still cancels normally.
+- [ ] While logged in as that non-admin owner, open the browser console
+      and try to delete the admin-touched booking directly, bypassing the
+      UI:
+  ```js
+  (async () => {
+    const { data, error } = await supabase
+      .from('bookings')
+      .delete()
+      .eq('id', 'PASTE_THE_ADMIN_TOUCHED_BOOKING_ID_HERE')
+      .select();
+    console.log({ data, error });
+  })();
+  ```
+  Expected: `data` is an empty array `[]` (0 rows affected) — confirm the
+  booking still exists in Current Bookings afterward. **This confirms the
+  lock is enforced by the database, not just by hiding the button.**
+
 ## Part 6 — Non-admin still can't touch role/admin status
 
 - [ ] Log back in as a non-admin account (or use one you didn't promote).
@@ -200,6 +231,50 @@ where id = (select id from auth.users where email = 'YOUR_EMAIL_HERE');
       time, booked-by name), with no edit/bump badge.
 - [ ] As the account that made it, confirm you can still **self-cancel**
       it exactly as before (no admin involvement needed).
+
+## Part 8 — Direct admin cancel
+
+- [ ] As an admin, find a booking made by a different user that has never
+      been edited (no "Rescheduled by admin" / "CANCELLED BY ADMIN" line
+      yet).
+- [ ] Confirm you now see **two** buttons on it: **Edit** and **Cancel**.
+- [ ] Click **Cancel**. Try submitting with the Reason field empty —
+      confirm it's blocked with "A reason is required." and nothing is
+      saved.
+- [ ] Fill in a reason (e.g. "testing direct cancel") and submit.
+- [ ] Confirm the booking now shows struck through with `CANCELLED BY
+      ADMIN — Reason: "testing direct cancel"`, exactly like a bumped
+      booking does.
+- [ ] If you have a second browser tab logged in as that booking's
+      original owner, confirm it updates there too within a second or
+      two via realtime, and their Cancel button is gone.
+- [ ] Try clicking **Cancel** again on that same (now-cancelled) booking
+      via the browser console (since the button no longer shows in the
+      UI once a booking is cancelled):
+  ```js
+  (async () => {
+    const { data, error } = await supabase.rpc('admin_cancel_booking', {
+      p_booking_id: 'PASTE_THE_JUST_CANCELLED_BOOKING_ID_HERE',
+      p_reason: 'double cancel attempt',
+    });
+    console.log({ data, error });
+  })();
+  ```
+  Expected: `error` is set with the message "Booking is already
+  cancelled"; `data` is `null`.
+- [ ] As a non-admin user, confirm the direct RPC bypass is also blocked
+      here:
+  ```js
+  (async () => {
+    const { data, error } = await supabase.rpc('admin_cancel_booking', {
+      p_booking_id: '00000000-0000-0000-0000-000000000000',
+      p_reason: 'test',
+    });
+    console.log({ data, error });
+  })();
+  ```
+  Expected: `error` is set with the message "Only admins can cancel other
+  bookings"; `data` is `null`.
 
 ---
 
