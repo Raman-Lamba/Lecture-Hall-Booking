@@ -92,7 +92,8 @@ export default function CurrentBookings({
                   )}
                   {!cancelled && b.last_edited_reason && (
                     <p className="text-xs text-blueprint font-mono mt-1">
-                      Rescheduled by admin — &quot;{b.last_edited_reason}&quot;
+                      Rescheduled by admin — &quot;{b.last_edited_reason}&quot; ·
+                      Cancellation now requires an admin.
                     </p>
                   )}
                 </div>
@@ -105,7 +106,7 @@ export default function CurrentBookings({
                       Edit
                     </button>
                   )}
-                  {!cancelled && b.user_id === currentUserId && (
+                  {!cancelled && !b.last_edited_by && b.user_id === currentUserId && (
                     <button
                       onClick={() => cancelBooking(b.id)}
                       disabled={cancelingId === b.id}
