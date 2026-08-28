@@ -11,6 +11,7 @@ interface CurrentBookingsProps {
   isAdmin: boolean;
   onChanged: () => void;
   onEditRequest: (booking: Booking) => void;
+  onCancelRequest: (booking: Booking) => void;
 }
 
 export default function CurrentBookings({
@@ -20,6 +21,7 @@ export default function CurrentBookings({
   isAdmin,
   onChanged,
   onEditRequest,
+  onCancelRequest,
 }: CurrentBookingsProps) {
   const [cancelingId, setCancelingId] = useState<string | null>(null);
 
@@ -104,6 +106,14 @@ export default function CurrentBookings({
                       className="text-xs font-mono text-blueprint border border-blueprint px-2 py-1 hover:bg-blueprint hover:text-paper"
                     >
                       Edit
+                    </button>
+                  )}
+                  {isAdmin && !cancelled && (
+                    <button
+                      onClick={() => onCancelRequest(b)}
+                      className="text-xs font-mono text-booked border border-booked px-2 py-1 hover:bg-booked hover:text-paper"
+                    >
+                      Cancel
                     </button>
                   )}
                   {!cancelled && !b.last_edited_by && b.user_id === currentUserId && (

@@ -10,6 +10,7 @@ import { serverNow, serverNowSync } from "@/lib/serverClock";
 import BookingModal from "@/components/BookingModal";
 import CurrentBookings from "@/components/CurrentBookings";
 import AdminEditBookingModal from "@/components/AdminEditBookingModal";
+import AdminCancelBookingModal from "@/components/AdminCancelBookingModal";
 import type { Room, Booking, RoomStatus } from "@/types";
 
 // 3D scene uses browser-only APIs (WebGL), so load it client-side only
@@ -59,6 +60,7 @@ export default function DashboardPage() {
   const [selectedRoom, setSelectedRoom] = useState<Room | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [editingBooking, setEditingBooking] = useState<Booking | null>(null);
+  const [cancelingBooking, setCancelingBooking] = useState<Booking | null>(null);
 
   // Correct the default date/time window against the server's clock once
   // on mount, in case the device's system clock is wrong (not just its
@@ -346,6 +348,7 @@ export default function DashboardPage() {
             fetchWindowBookings();
           }}
           onEditRequest={setEditingBooking}
+          onCancelRequest={setCancelingBooking}
         />
       </div>
 
@@ -372,6 +375,21 @@ export default function DashboardPage() {
           onClose={() => setEditingBooking(null)}
           onSaved={() => {
             setEditingBooking(null);
+            fetchCurrentBookings();
+            fetchWindowBookings();
+          }}
+        />
+      )}
+
+      {cancelingBooking && (
+        <AdminCancelBookingModal
+          booking={cancelingBooking}
+          roomName={
+            rooms.find((r) => r.id === cancelingBooking.room_id)?.name ?? "This room"
+          }
+          onClose={() => setCancelingBooking(null)}
+          onCancelled={() => {
+            setCancelingBooking(null);
             fetchCurrentBookings();
             fetchWindowBookings();
           }}
