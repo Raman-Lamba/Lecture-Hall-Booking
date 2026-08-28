@@ -569,3 +569,57 @@ create policy "users can delete their own bookings"
   on bookings for delete
   to authenticated
   using (auth.uid() = user_id and last_edited_by is null);
+
+-- --------------------------------------------
+-- 14b. Direct admin cancel.
+-- --------------------------------------------
+-- Unlike admin_edit_booking, this never needs conflict handling --
+-- cancelling a booking only ever frees a slot, it can't collide with
+-- anything. `select ... for update` plus the explicit already-cancelled
+-- check below prevents two admins racing to cancel the same booking from
+-- silently double-stamping last_edited_at.
+create or replace function public.admin_cancel_booking(
+  p_booking_id uuid,
+  p_reason text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_status text;
+begin
+  if not public.is_admin() then
+    raise exception 'Only admins can cancel other bookings';
+  end if;
+
+  if p_reason is null or btrim(p_reason) = '' then
+    raise exception 'A reason is required';
+  end if;
+
+  select status into v_status
+    from public.bookings
+    where id = p_booking_id
+    for update;
+
+  if not found then
+    raise exception 'Booking not found';
+  end if;
+
+  if v_status = 'cancelled' then
+    raise exception 'Booking is already cancelled';
+  end if;
+
+  update public.bookings
+    set status = 'cancelled',
+        last_edited_by = auth.uid(),
+        last_edited_reason = p_reason,
+        last_edited_at = now()
+    where id = p_booking_id;
+
+  return jsonb_build_object('status', 'ok');
+end;
+$$;
+
+grant execute on function public.admin_cancel_booking to authenticated;
