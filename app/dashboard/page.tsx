@@ -227,21 +227,23 @@ export default function DashboardPage() {
 
   function getStatus(room: Room): RoomStatus {
     if (selectedRoom?.id === room.id) return "selected";
-    const conflicts = windowBookings.filter((b) => b.room_id === room.id);
-    if (conflicts.length === 0) return "available";
     const now = serverNowSync();
+    const conflicts = windowBookings.filter(
+      (b) => b.room_id === room.id && new Date(b.end_time) > now
+    );
+    if (conflicts.length === 0) return "available";
     const inProgress = conflicts.some((b) => new Date(b.start_time) <= now);
     return inProgress ? "booked" : "upcoming";
   }
 
   function handleRoomClick(room: Room) {
-    const isBooked = windowBookings.some((b) => b.room_id === room.id);
-    if (isBooked) {
-      const conflict = windowBookings.find((b) => b.room_id === room.id);
+    const now = serverNowSync();
+    const conflict = windowBookings.find(
+      (b) => b.room_id === room.id && new Date(b.end_time) > now
+    );
+    if (conflict) {
       alert(
-        `${room.name} is already booked for this window` +
-          (conflict ? `: "${conflict.title}"` : "") +
-          ". Try a different time range."
+        `${room.name} is already booked for this window: "${conflict.title}". Try a different time range.`
       );
       return;
     }
