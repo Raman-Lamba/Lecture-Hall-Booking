@@ -550,3 +550,22 @@ $$;
 grant execute on function public.admin_edit_booking(
   uuid, uuid, text, timestamptz, timestamptz, text, boolean, uuid[]
 ) to authenticated;
+
+-- ============================================
+-- 14. ADMIN DIRECT CANCEL + USER-CANCEL LOCK
+-- ============================================
+
+-- --------------------------------------------
+-- 14a. Lock a user's self-cancel once an admin has touched the booking.
+-- --------------------------------------------
+-- last_edited_by is set only by admin_edit_booking and (below)
+-- admin_cancel_booking -- never by anything else. Once an admin has
+-- edited or cancelled a booking, the original owner can no longer
+-- hard-delete it themselves, through ANY path (UI, direct REST call,
+-- etc.), because this is enforced in the policy's `using` clause, not
+-- just by hiding the Cancel button client-side.
+drop policy if exists "users can delete their own bookings" on bookings;
+create policy "users can delete their own bookings"
+  on bookings for delete
+  to authenticated
+  using (auth.uid() = user_id and last_edited_by is null);
