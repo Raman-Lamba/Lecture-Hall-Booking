@@ -24,15 +24,24 @@ export default function CurrentBookings({
   onCancelRequest,
 }: CurrentBookingsProps) {
   const [cancelingId, setCancelingId] = useState<string | null>(null);
+  const [cancelError, setCancelError] = useState<{ id: string; message: string } | null>(null);
 
   const roomName = (roomId: string) =>
     rooms.find((r) => r.id === roomId)?.name ?? "Unknown room";
 
   async function cancelBooking(id: string) {
     setCancelingId(id);
-    const { error } = await supabase.from("bookings").delete().eq("id", id);
+    setCancelError(null);
+    const { data, error } = await supabase.from("bookings").delete().eq("id", id).select();
     setCancelingId(null);
-    if (!error) onChanged();
+    if (error) return;
+    if (!data || data.length === 0) {
+      setCancelError({
+        id,
+        message: "An admin has taken over this booking — ask an admin to cancel it.",
+      });
+    }
+    onChanged();
   }
 
   const sorted = [...bookings].sort(
@@ -92,10 +101,17 @@ export default function CurrentBookings({
                       CANCELLED BY ADMIN — Reason: &quot;{b.last_edited_reason}&quot;
                     </p>
                   )}
-                  {!cancelled && b.last_edited_reason && (
+                  {!cancelled && b.last_edited_by && (
                     <p className="text-xs text-blueprint font-mono mt-1">
-                      Rescheduled by admin — &quot;{b.last_edited_reason}&quot; ·
-                      Cancellation now requires an admin.
+                      Rescheduled by admin — &quot;{b.last_edited_reason}&quot;
+                      {b.user_id === currentUserId && !isAdmin && (
+                        <> · Cancellation now requires an admin.</>
+                      )}
+                    </p>
+                  )}
+                  {cancelError?.id === b.id && !b.last_edited_by && (
+                    <p className="text-xs text-booked font-mono mt-1">
+                      {cancelError.message}
                     </p>
                   )}
                 </div>
@@ -113,7 +129,7 @@ export default function CurrentBookings({
                       onClick={() => onCancelRequest(b)}
                       className="text-xs font-mono text-booked border border-booked px-2 py-1 hover:bg-booked hover:text-paper"
                     >
-                      Cancel
+                      Admin cancel
                     </button>
                   )}
                   {!cancelled && !b.last_edited_by && b.user_id === currentUserId && (

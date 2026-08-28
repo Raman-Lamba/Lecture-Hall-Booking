@@ -11,6 +11,22 @@ interface AdminCancelBookingModalProps {
   onCancelled: () => void;
 }
 
+function formatRange(booking: Booking) {
+  const start = new Date(booking.start_time);
+  const end = new Date(booking.end_time);
+  const sameDay = start.toDateString() === end.toDateString();
+
+  const startStr = start.toLocaleString([], {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+  const endStr = sameDay
+    ? end.toLocaleTimeString([], { timeStyle: "short" })
+    : end.toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+
+  return `${startStr} → ${endStr}`;
+}
+
 export default function AdminCancelBookingModal({
   booking,
   roomName,
@@ -52,9 +68,10 @@ export default function AdminCancelBookingModal({
           ADMIN CANCEL
         </p>
         <h2 className="font-mono text-xl font-semibold mb-1">{booking.title}</h2>
-        <p className="text-sm text-ink/60 mb-5">
+        <p className="text-sm text-ink/60">
           {roomName} — booked by {booking.user_name}
         </p>
+        <p className="text-sm text-ink/60 mb-5">{formatRange(booking)}</p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>

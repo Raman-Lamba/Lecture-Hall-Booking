@@ -554,6 +554,13 @@ grant execute on function public.admin_edit_booking(
 -- ============================================
 -- 14. ADMIN DIRECT CANCEL + USER-CANCEL LOCK
 -- ============================================
+-- DEPLOY ORDER: run both 14a and 14b against the target Supabase project
+-- BEFORE deploying the frontend commits that consume them. If the frontend
+-- ships first: the new admin Cancel button is visible but every submit
+-- fails with a raw "Could not find the function public.admin_cancel_booking"
+-- error, and worse, the owner's Cancel button is hidden by the frontend's
+-- last_edited_by check while the database still accepts the delete -- the
+-- lock looks enforced in the UI but isn't actually active server-side yet.
 
 -- --------------------------------------------
 -- 14a. Lock a user's self-cancel once an admin has touched the booking.
